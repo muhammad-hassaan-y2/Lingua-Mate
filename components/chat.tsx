@@ -1,9 +1,8 @@
 'use client';
 
-import type { Attachment, Message } from 'ai';
-import { useChat } from 'ai/react';
+import { useState, useEffect } from 'react';
+import { useChat, Message as AiMessage } from 'ai/react';
 import { AnimatePresence } from 'framer-motion';
-import { useState, useEffect, useRef } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { useWindowSize } from 'usehooks-ts';
 
@@ -12,54 +11,47 @@ import { PreviewMessage, ThinkingMessage } from '@/components/message';
 import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
 import type { Vote } from '@/lib/db/schema';
 import { fetcher } from '@/lib/utils';
+import type { Message } from '@/types/chat';
 
 import { Block, type UIBlock } from './block';
 import { BlockStreamHandler } from './block-stream-handler';
 import { MultimodalInput } from './multimodal-input';
 import { Overview } from './overview';
 
-export function Chat({
-  id,
-  initialMessages,
-  selectedModelId,
-}: {
+interface ChatProps {
   id: string;
-  initialMessages: Array<Message>;
+  initialMessages: Message[];
   selectedModelId: string;
-}) {
+}
+
+export function Chat({ id, initialMessages, selectedModelId }: ChatProps) {
   const { mutate } = useSWRConfig();
-  const [streamedMessage, setStreamedMessage] = useState<Message | null>(null);
 
   const {
-    messages,
-    setMessages,
-    handleSubmit,
+    messages: aiMessages,
+    setMessages: setAiMessages,
+    handleSubmit: handleAiSubmit,
     input,
     setInput,
     append,
     isLoading,
     stop,
     data: streamingData,
-  } = useChat<Message>({
-    api: '/api/chat',
-    id,
-    body: { 
-      id, 
-      modelId: selectedModelId 
-    },
-    initialMessages,
-    onError: (error) => {
-      console.error('Chat error:', error);
-    },
-    onFinish: (message) => {
+  } = useChat({
+    body: { id, modelId: selectedModelId },
+    initialMessages: initialMessages as AiMessage[],
+    onFinish: () => {
       mutate('/api/history');
-      setStreamedMessage(null);
-      setMessages((prevMessages) => [...prevMessages, message]);
-    }
+    },
   });
 
-  const { width: windowWidth = 1920, height: windowHeight = 1080 } =
-    useWindowSize();
+  const [messages, setMessages] = useState<Message[]>(initialMessages);
+
+  useEffect(() => {
+    setMessages(aiMessages.map(msg => ({ ...msg, chatId: id })));
+  }, [aiMessages, id]);
+
+  const { width: windowWidth = 1920, height: windowHeight = 1080 } = useWindowSize();
 
   const [block, setBlock] = useState<UIBlock>({
     documentId: 'init',
@@ -75,23 +67,37 @@ export function Chat({
     },
   });
 
-  const { data: votes } = useSWR<Array<Vote>>(
+  const { data: votes, mutate: mutateVotes } = useSWR<Array<Vote>>(
     `/api/vote?chatId=${id}`,
     fetcher,
   );
 
-  const [messagesContainerRef, messagesEndRef] =
-    useScrollToBottom<HTMLDivElement>();
+  const [messagesContainerRef, messagesEndRef] = useScrollToBottom<HTMLDivElement>();
 
-  const [attachments, setAttachments] = useState<Array<Attachment>>([]);
+  const [attachments, setAttachments] = useState<Array<AiMessage['attachments'][0]>>([]);
 
   useEffect(() => {
-    if (streamingData && typeof streamingData === 'object' && 'content' in streamingData) {
-      setStreamedMessage(streamingData as unknown as Message);
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [streamingData]);
+  }, [messages]);
 
-  const displayMessages = [...messages, ...(streamedMessage ? [streamedMessage] : [])];
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!input.trim()) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      content: input,
+      role: 'user',
+      chatId: id,
+    };
+
+    setMessages((prevMessages) => [...prevMessages, userMessage]);
+    setInput('');
+
+    await handleAiSubmit(e);
+  };
 
   return (
     <>
@@ -101,35 +107,27 @@ export function Chat({
           ref={messagesContainerRef}
           className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-scroll pt-4"
         >
-          {displayMessages.length === 0 && <Overview />}
+          {messages.length === 0 && <Overview />}
 
-          {displayMessages.map((message) => (
+          {messages.map((message, index) => (
             <PreviewMessage
               key={message.id}
               chatId={id}
               message={message}
               block={block}
               setBlock={setBlock}
-              isLoading={isLoading && message.id === displayMessages[displayMessages.length - 1]?.id}
+              isLoading={isLoading && messages.length - 1 === index}
               vote={votes?.find((vote) => vote.messageId === message.id)}
             />
           ))}
 
-          {isLoading && displayMessages.length > 0 && displayMessages[displayMessages.length - 1].role === 'user' && (
+          {isLoading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
             <ThinkingMessage />
           )}
 
           <div ref={messagesEndRef} className="shrink-0 min-w-[24px] min-h-[24px]" />
         </div>
-
-        <form 
-          className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!input.trim()) return;
-            handleSubmit(e);
-          }}
-        >
+        <form onSubmit={handleSubmit} className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
           <MultimodalInput
             chatId={id}
             input={input}
@@ -171,4 +169,3 @@ export function Chat({
     </>
   );
 }
-

@@ -1,14 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
 import { auth } from '@/app/(auth)/auth';
-import {
-  deleteChatById,
-  getChatById,
-  saveChat,
-  saveMessages,
-} from '@/lib/db/queries';
+import { saveChat, getChatById, saveMessages, deleteChatById } from '@/lib/db/queries';
 import { generateUUID } from '@/lib/utils';
 import { generateTitleFromUserMessage } from '../../actions';
+import { ApiResponse, Message } from '@/types/chat';
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY || '');
 
@@ -26,45 +22,28 @@ When responding:
 - Use examples when helpful
 - Format responses with markdown for better readability
 - Keep responses focused and relevant to the user's question
-- Be friendly and engaging while maintaining professionalism
+- Be friendly and engaging while maintaining professionalism`;
 
-If you're asked to write code:
-- Include clear comments
-- Follow best practices
-- Explain the code's functionality
-- Provide usage examples when appropriate
-
-Remember to:
-- Be direct and helpful
-- Stay on topic
-- Respond in the same language as the user's question
-- Maintain a helpful and positive tone`;
-
-function formatChatHistory(messages: Array<{ role: string; content: string }>) {
+function formatChatHistory(messages: Array<Message>): Array<{ role: string; parts: Array<{ text: string }> }> {
   return messages
     .filter(msg => msg.role !== 'system')
-    .map((msg, index) => {
-      if (index === 0 && msg.role === 'user') {
-        return {
-          role: 'user',
-          parts: [{ text: `${SYSTEM_PROMPT}\n\nUser: ${msg.content}` }]
-        };
-      }
-      return {
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }]
-      };
-    });
+    .map(msg => ({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.content }],
+    }));
 }
 
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<NextResponse<ApiResponse<Message>>> {
   try {
-    const { id, messages, modelId } = await request.json();
-    console.log('Received request:', { id, messageCount: messages.length });
-
     const session = await auth();
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { id, messages } = await request.json();
+
+    if (!id || !Array.isArray(messages) || messages.length === 0) {
+      return NextResponse.json({ error: 'Invalid input' }, { status: 400 });
     }
 
     const lastMessage = messages[messages.length - 1];
@@ -72,108 +51,79 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid message' }, { status: 400 });
     }
 
-    console.log('Processing message:', lastMessage.content);
-
+    // Ensure chat exists
     const chat = await getChatById({ id });
     if (!chat) {
-      const title = await generateTitleFromUserMessage({ message: lastMessage });
+      const title = await generateTitleFromUserMessage({ message: lastMessage.content });
       await saveChat({ id, userId: session.user.id, title });
     }
 
+    // Save the user's message
+    const userMessageId = generateUUID();
     await saveMessages({
       messages: [
-        { ...lastMessage, id: generateUUID(), createdAt: new Date(), chatId: id },
+        {
+          id: userMessageId,
+          chatId: id,
+          role: 'user',
+          content: lastMessage.content,
+          createdAt: new Date(),
+        },
       ],
     });
 
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          const model = genAI.getGenerativeModel({
-            model: 'gemini-pro',
-            generationConfig: {
-              temperature: 0.7,
-              topP: 0.8,
-              topK: 40,
-              maxOutputTokens: 2048,
-            },
-          });
-
-          let responseStream;
-          if (messages.length === 1) {
-            const result = await model.generateContentStream([
-              { text: `${SYSTEM_PROMPT}\n\nUser: ${lastMessage.content}` }
-            ]);
-            responseStream = result.stream;
-          } else {
-            const chatHistory = formatChatHistory(messages.slice(0, -1));
-            const chat = model.startChat({
-              history: chatHistory,
-              generationConfig: {
-                temperature: 0.7,
-                topP: 0.8,
-                topK: 40,
-                maxOutputTokens: 2048,
-              },
-            });
-            const result = await chat.sendMessageStream(lastMessage.content);
-            responseStream = result.stream;
-          }
-
-          const messageId = generateUUID();
-          let fullResponse = '';
-
-          for await (const chunk of responseStream) {
-            const text = chunk.text();
-            fullResponse += text;
-            
-            const data = {
-              id: messageId,
-              role: 'assistant',
-              content: fullResponse
-            };
-
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-          }
-
-          await saveMessages({
-            messages: [{
-              id: messageId,
-              chatId: id,
-              role: 'assistant',
-              content: fullResponse,
-              createdAt: new Date(),
-            }],
-          });
-
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          controller.close();
-        } catch (error) {
-          console.error('Streaming error:', error);
-          controller.error(error);
-        }
+    // Generate AI response
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-pro',
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.8,
+        topK: 40,
+        maxOutputTokens: 2048,
       },
     });
 
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
+    let response;
+    if (messages.length === 1) {
+      response = await model.generateContent([
+        { text: `${SYSTEM_PROMPT}\n\nUser: ${lastMessage.content}` },
+      ]);
+    } else {
+      const chatHistory = formatChatHistory(messages.slice(0, -1));
+      const chat = model.startChat({
+        history: chatHistory,
+        generationConfig: {
+          temperature: 0.7,
+          topP: 0.8,
+          topK: 40,
+          maxOutputTokens: 2048,
+        },
+      });
+      response = await chat.sendMessage(lastMessage.content);
+    }
 
+    const responseText = response.response.text();
+    const messageId = generateUUID();
+
+    // Save assistant's response
+    const assistantMessage: Message = {
+      id: messageId,
+      chatId: id,
+      role: 'assistant',
+      content: responseText,
+      createdAt: new Date(),
+    };
+
+    await saveMessages({ messages: [assistantMessage] });
+
+    return NextResponse.json({ data: assistantMessage });
   } catch (error) {
-    console.error('Request error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    console.error('Error processing chat request:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function DELETE(request: Request) {
+export async function DELETE(request: Request): Promise<NextResponse<ApiResponse<{ message: string }>>> {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -183,23 +133,20 @@ export async function DELETE(request: Request) {
     }
 
     const session = await auth();
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const chat = await getChatById({ id });
-    if (chat.userId !== session.user.id) {
+    if (!chat || chat.userId !== session.user.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     await deleteChatById({ id });
-    return NextResponse.json({ message: 'Chat deleted' });
+    return NextResponse.json({ data: { message: 'Chat deleted successfully.' } });
   } catch (error) {
-    console.error('Delete error:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete chat' },
-      { status: 500 }
-    );
+    console.error('Error deleting chat:', error);
+    return NextResponse.json({ error: 'Failed to delete chat.' }, { status: 500 });
   }
 }
 

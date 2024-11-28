@@ -8,12 +8,12 @@ import type {
 } from 'ai';
 import cx from 'classnames';
 import { motion } from 'framer-motion';
-import type React from 'react';
-import {
+import React, {
   useRef,
   useEffect,
   useState,
   useCallback,
+  type FormEvent,
   type Dispatch,
   type SetStateAction,
   type ChangeEvent,
@@ -41,21 +41,7 @@ const suggestedActions = [
   },
 ];
 
-
-export function MultimodalInput({
-  chatId,
-  input,
-  setInput,
-  isLoading,
-  stop,
-  attachments,
-  setAttachments,
-  messages,
-  setMessages,
-  append,
-  handleSubmit,
-  className,
-}: {
+interface MultimodalInputProps {
   chatId: string;
   input: string;
   setInput: (value: string) => void;
@@ -70,15 +56,29 @@ export function MultimodalInput({
     chatRequestOptions?: ChatRequestOptions,
   ) => Promise<string | null | undefined>;
   handleSubmit: (
-    event?: {
-      preventDefault?: () => void;
-    },
+    event: FormEvent<HTMLFormElement>,
     chatRequestOptions?: ChatRequestOptions,
   ) => void;
   className?: string;
-}) {
+}
+
+export function MultimodalInput({
+  chatId,
+  input,
+  setInput,
+  isLoading,
+  stop,
+  attachments,
+  setAttachments,
+  messages,
+  setMessages,
+  append,
+  handleSubmit,
+  className,
+}: MultimodalInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -101,13 +101,10 @@ export function MultimodalInput({
   useEffect(() => {
     if (textareaRef.current) {
       const domValue = textareaRef.current.value;
-      // Prefer DOM value over localStorage to handle hydration
       const finalValue = domValue || localStorageInput || '';
       setInput(finalValue);
       adjustHeight();
     }
-    // Only run once after hydration
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -122,10 +119,15 @@ export function MultimodalInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<Array<string>>([]);
 
-  const submitForm = useCallback(() => {
+  const submitForm = useCallback((event?: FormEvent) => {
+    if (event) {
+      event.preventDefault();
+    }
+
     window.history.replaceState({}, '', `/chat/${chatId}`);
 
-    handleSubmit(undefined, {
+    const formEvent = new FormEvent(formRef.current as HTMLFormElement);
+    handleSubmit(formEvent, {
       experimental_attachments: attachments,
     });
 
@@ -137,11 +139,11 @@ export function MultimodalInput({
     }
   }, [
     attachments,
+    chatId,
     handleSubmit,
     setAttachments,
     setLocalStorageInput,
     width,
-    chatId,
   ]);
 
   const uploadFile = async (file: File) => {
@@ -174,14 +176,13 @@ export function MultimodalInput({
   const handleFileChange = useCallback(
     async (event: ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(event.target.files || []);
-
       setUploadQueue(files.map((file) => file.name));
 
       try {
         const uploadPromises = files.map((file) => uploadFile(file));
         const uploadedAttachments = await Promise.all(uploadPromises);
         const successfullyUploadedAttachments = uploadedAttachments.filter(
-          (attachment) => attachment !== undefined,
+          (attachment): attachment is Attachment => attachment !== undefined,
         );
 
         setAttachments((currentAttachments) => [
@@ -198,7 +199,7 @@ export function MultimodalInput({
   );
 
   return (
-    <div className="relative w-full flex flex-col gap-4">
+    <form ref={formRef} onSubmit={submitForm} className="relative w-full flex flex-col gap-4">
       {messages.length === 0 &&
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
@@ -216,7 +217,6 @@ export function MultimodalInput({
                   variant="ghost"
                   onClick={async () => {
                     window.history.replaceState({}, '', `/chat/${chatId}`);
-
                     append({
                       role: 'user',
                       content: suggestedAction.action,
@@ -289,9 +289,9 @@ export function MultimodalInput({
 
       {isLoading ? (
         <Button
+          type="button"
           className="rounded-full p-1.5 h-fit absolute bottom-2 right-2 m-0.5 border dark:border-zinc-600"
-          onClick={(event) => {
-            event.preventDefault();
+          onClick={() => {
             stop();
             setMessages((messages) => sanitizeUIMessages(messages));
           }}
@@ -300,11 +300,8 @@ export function MultimodalInput({
         </Button>
       ) : (
         <Button
+          type="submit"
           className="rounded-full p-1.5 h-fit absolute bottom-2 right-2 m-0.5 border dark:border-zinc-600"
-          onClick={(event) => {
-            event.preventDefault();
-            submitForm();
-          }}
           disabled={input.length === 0 || uploadQueue.length > 0}
         >
           <ArrowUpIcon size={14} />
@@ -312,9 +309,9 @@ export function MultimodalInput({
       )}
 
       <Button
+        type="button"
         className="rounded-full p-1.5 h-fit absolute bottom-2 right-11 m-0.5 dark:border-zinc-700"
-        onClick={(event) => {
-          event.preventDefault();
+        onClick={() => {
           fileInputRef.current?.click();
         }}
         variant="outline"
@@ -322,6 +319,6 @@ export function MultimodalInput({
       >
         <PaperclipIcon size={14} />
       </Button>
-    </div>
+    </form>
   );
 }

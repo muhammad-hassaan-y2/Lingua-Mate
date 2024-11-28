@@ -7,9 +7,9 @@ import type {
 import cx from 'classnames';
 import { formatDistance } from 'date-fns';
 import { AnimatePresence, motion } from 'framer-motion';
-import {
-  type Dispatch,
-  type SetStateAction,
+import React, {
+  Dispatch,
+  SetStateAction,
   useCallback,
   useEffect,
   useState,
@@ -36,6 +36,7 @@ import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { useScrollToBottom } from './use-scroll-to-bottom';
 import { VersionFooter } from './version-footer';
+
 export interface UIBlock {
   title: string;
   documentId: string;
@@ -50,45 +51,39 @@ export interface UIBlock {
   };
 }
 
-export function Block({
-  chatId,
-  input,
-  setInput,
-  handleSubmit,
-  isLoading,
-  stop,
-  attachments,
-  setAttachments,
-  append,
-  block,
-  setBlock,
-  messages,
-  setMessages,
-  votes,
-}: {
-  chatId: string;
-  input: string;
-  setInput: (input: string) => void;
-  isLoading: boolean;
-  stop: () => void;
-  attachments: Array<Attachment>;
-  setAttachments: Dispatch<SetStateAction<Array<Attachment>>>;
-  block: UIBlock;
-  setBlock: Dispatch<SetStateAction<UIBlock>>;
-  messages: Array<Message>;
-  setMessages: Dispatch<SetStateAction<Array<Message>>>;
-  votes: Array<Vote> | undefined;
-  append: (
-    message: Message | CreateMessage,
-    chatRequestOptions?: ChatRequestOptions,
-  ) => Promise<string | null | undefined>;
-  handleSubmit: (
-    event?: {
-      preventDefault?: () => void;
-    },
-    chatRequestOptions?: ChatRequestOptions,
-  ) => void;
-}) {
+  interface BlockProps {
+    chatId: string;
+    input: string;
+    setInput: (input: string) => void;
+    handleSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+    isLoading: boolean;
+    stop: () => void;
+    attachments: Array<Message['attachments'][0]>;
+    setAttachments: React.Dispatch<React.SetStateAction<Array<Message['attachments'][0]>>>;
+    append: (message: Message) => void;
+    block: UIBlock;
+    setBlock: React.Dispatch<React.SetStateAction<UIBlock>>;
+    messages: Message[];
+    setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+    votes: Vote[] | undefined;
+  }
+  
+  export function Block({
+    chatId,
+    input,
+    setInput,
+    handleSubmit,
+    isLoading,
+    stop,
+    attachments,
+    setAttachments,
+    append,
+    block,
+    setBlock,
+    messages,
+    setMessages,
+    votes,
+  }: BlockProps) {
   const [messagesContainerRef, messagesEndRef] =
     useScrollToBottom<HTMLDivElement>();
 
@@ -232,12 +227,6 @@ export function Block({
   };
 
   const [isToolbarVisible, setIsToolbarVisible] = useState(false);
-
-  /*
-   * NOTE: if there are no documents, or if
-   * the documents are being fetched, then
-   * we mark it as the current version.
-   */
 
   const isCurrentVersion =
     documents && documents.length > 0
