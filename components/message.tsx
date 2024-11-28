@@ -39,7 +39,11 @@ export const PreviewMessage = ({
     >
       <div
         className={cx(
-          'group-data-[role=user]/message:bg-primary group-data-[role=user]/message:text-primary-foreground flex gap-4 group-data-[role=user]/message:px-3 w-full group-data-[role=user]/message:w-fit group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl group-data-[role=user]/message:py-2 rounded-xl',
+          'group flex gap-4 w-full rounded-xl',
+          {
+            'bg-[#DCCAEF] text-primary-foreground px-3 w-fit ml-auto max-w-2xl py-2': message.role === 'user',
+            'bg-[#F9F4FF]': message.role === 'assistant'
+          }
         )}
       >
         {message.role === 'assistant' && (
@@ -155,7 +159,7 @@ export const ThinkingMessage = () => {
     >
       <div
         className={cx(
-          'flex gap-4 group-data-[role=user]/message:px-3 w-full group-data-[role=user]/message:w-fit group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl group-data-[role=user]/message:py-2 rounded-xl',
+          'flex gap-4 w-full rounded-xl bg-[#F9F4FF]',
           {
             'group-data-[role=user]/message:bg-muted': true,
           },
