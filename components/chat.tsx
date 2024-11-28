@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useChat, Message as AiMessage } from 'ai/react';
+import type { Attachment, Message } from 'ai';
+import { useChat } from 'ai/react';
 import { AnimatePresence } from 'framer-motion';
+import { useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { useWindowSize } from 'usehooks-ts';
 
@@ -11,26 +12,30 @@ import { PreviewMessage, ThinkingMessage } from '@/components/message';
 import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
 import type { Vote } from '@/lib/db/schema';
 import { fetcher } from '@/lib/utils';
-import type { Message } from '@/types/chat';
 
 import { Block, type UIBlock } from './block';
 import { BlockStreamHandler } from './block-stream-handler';
 import { MultimodalInput } from './multimodal-input';
 import { Overview } from './overview';
 
-interface ChatProps {
-  id: string;
-  initialMessages: Message[];
-  selectedModelId: string;
-}
+import ChatBack from "@/public/chat-background.png";
+import Image from 'next/image';
 
-export function Chat({ id, initialMessages, selectedModelId }: ChatProps) {
+export function Chat({
+  id,
+  initialMessages,
+  selectedModelId,
+}: {
+  id: string;
+  initialMessages: Array<Message>;
+  selectedModelId: string;
+}) {
   const { mutate } = useSWRConfig();
 
   const {
-    messages: aiMessages,
-    setMessages: setAiMessages,
-    handleSubmit: handleAiSubmit,
+    messages,
+    setMessages,
+    handleSubmit,
     input,
     setInput,
     append,
@@ -39,19 +44,14 @@ export function Chat({ id, initialMessages, selectedModelId }: ChatProps) {
     data: streamingData,
   } = useChat({
     body: { id, modelId: selectedModelId },
-    initialMessages: initialMessages as AiMessage[],
+    initialMessages,
     onFinish: () => {
       mutate('/api/history');
     },
   });
 
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
-
-  useEffect(() => {
-    setMessages(aiMessages.map(msg => ({ ...msg, chatId: id })));
-  }, [aiMessages, id]);
-
-  const { width: windowWidth = 1920, height: windowHeight = 1080 } = useWindowSize();
+  const { width: windowWidth = 1920, height: windowHeight = 1080 } =
+    useWindowSize();
 
   const [block, setBlock] = useState<UIBlock>({
     documentId: 'init',
@@ -67,42 +67,31 @@ export function Chat({ id, initialMessages, selectedModelId }: ChatProps) {
     },
   });
 
-  const { data: votes, mutate: mutateVotes } = useSWR<Array<Vote>>(
+  const { data: votes } = useSWR<Array<Vote>>(
     `/api/vote?chatId=${id}`,
     fetcher,
   );
 
-  const [messagesContainerRef, messagesEndRef] = useScrollToBottom<HTMLDivElement>();
+  const [messagesContainerRef, messagesEndRef] =
+    useScrollToBottom<HTMLDivElement>();
 
-  const [attachments, setAttachments] = useState<Array<AiMessage['attachments'][0]>>([]);
-
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
-
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content: input,
-      role: 'user',
-      chatId: id,
-    };
-
-    setMessages((prevMessages) => [...prevMessages, userMessage]);
-    setInput('');
-
-    await handleAiSubmit(e);
-  };
+  const [attachments, setAttachments] = useState<Array<Attachment>>([]);
 
   return (
     <>
-      <div className="flex flex-col min-w-0 h-dvh bg-background">
-        <ChatHeader selectedModelId={selectedModelId} />
+       <div className="relative flex flex-col min-w-0 h-dvh">
+        <div className="fixed inset-0 z-0">
+          <Image
+            src={ChatBack}
+            alt="Chat Background"
+            fill
+            style={{ objectFit: 'cover' }}
+            quality={100}
+            priority
+          />
+        </div>
+        
+        <ChatHeader  />
         <div
           ref={messagesContainerRef}
           className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-scroll pt-4"
@@ -117,17 +106,26 @@ export function Chat({ id, initialMessages, selectedModelId }: ChatProps) {
               block={block}
               setBlock={setBlock}
               isLoading={isLoading && messages.length - 1 === index}
-              vote={votes?.find((vote) => vote.messageId === message.id)}
+              vote={
+                votes
+                  ? votes.find((vote) => vote.messageId === message.id)
+                  : undefined
+              }
             />
           ))}
 
-          {isLoading && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
-            <ThinkingMessage />
-          )}
+          {isLoading &&
+            messages.length > 0 &&
+            messages[messages.length - 1].role === 'user' && (
+              <ThinkingMessage />
+            )}
 
-          <div ref={messagesEndRef} className="shrink-0 min-w-[24px] min-h-[24px]" />
+          <div
+            ref={messagesEndRef}
+            className="shrink-0 min-w-[24px] min-h-[24px]"
+          />
         </div>
-        <form onSubmit={handleSubmit} className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
+        <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
           <MultimodalInput
             chatId={id}
             input={input}
